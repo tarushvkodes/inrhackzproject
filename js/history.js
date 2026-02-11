@@ -1,5 +1,6 @@
 /**
- * Socratic — Session History Logic
+ * Socratic — Session History Logic (Static / GitHub Pages version)
+ * Reads all sessions from localStorage.
  */
 
 let allSessions = [];
@@ -19,23 +20,14 @@ function setupFilters() {
     });
 }
 
-async function loadHistory() {
-    try {
-        const res = await fetch('/api/sessions');
-        const data = await res.json();
+function loadHistory() {
+    allSessions = Storage.getAllSessions();
 
-        if (data.success) {
-            allSessions = data.sessions;
-            if (allSessions.length === 0) {
-                document.getElementById('historyList').style.display = 'none';
-                document.getElementById('emptyState').style.display = 'block';
-            } else {
-                renderSessions('all');
-            }
-        }
-    } catch (err) {
-        document.getElementById('historyList').innerHTML =
-            '<p style="text-align:center;color:var(--text-muted);">Failed to load sessions.</p>';
+    if (allSessions.length === 0) {
+        document.getElementById('historyList').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+    } else {
+        renderSessions('all');
     }
 }
 
@@ -55,16 +47,17 @@ function renderSessions(filter) {
         const badge = s.is_active
             ? '<span class="session-badge active">Active</span>'
             : '<span class="session-badge completed">Completed</span>';
-        const url = s.is_active ? `/learn/${s.id}` : `/review/${s.id}`;
+        const url = s.is_active ? `session.html?id=${s.id}` : `review.html?id=${s.id}`;
         const date = new Date(s.started_at).toLocaleDateString('en-US', {
             month: 'short', day: 'numeric', year: 'numeric'
         });
+        const duration = Storage.getSessionDuration(s);
 
         return `
             <a href="${url}" class="history-card">
                 <div class="history-card-info">
                     <h4>${escapeHtml(s.topic)}</h4>
-                    <p>${date} · ${s.total_exchanges} exchanges · ${s.duration_minutes}m · ${capitalize(s.highest_difficulty)}</p>
+                    <p>${date} · ${s.total_exchanges} exchanges · ${duration}m · ${capitalize(s.highest_difficulty)}</p>
                 </div>
                 <div class="history-card-right">
                     <span class="history-score">${s.final_understanding_score}%</span>

@@ -1,14 +1,23 @@
-{% extends "base.html" %}
-{% block content %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socratic — Learning Session</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+</head>
+<body>
 <div class="app-container session-page">
     <!-- Session Header -->
     <header class="session-header">
         <div class="session-header-left">
-            <a href="/" class="back-link">← Back</a>
+            <a href="index.html" class="back-link">← Back</a>
             <div class="session-topic">
                 <div class="brand-icon-small">σ</div>
                 <div>
-                    <h1 id="sessionTopic">{{ session.topic }}</h1>
+                    <h1 id="sessionTopic">Loading...</h1>
                     <span class="session-meta" id="sessionMeta">Exchange 1 · Foundational</span>
                 </div>
             </div>
@@ -106,8 +115,8 @@
     </div>
 </div>
 
-<script>
-    const SESSION_ID = "{{ session.id }}";
-</script>
-<script src="/static/js/session.js"></script>
-{% endblock %}
+<script src="js/storage.js"></script>
+<script src="js/gemini-api.js"></script>
+<script src="js/session.js"></script>
+</body>
+</html>

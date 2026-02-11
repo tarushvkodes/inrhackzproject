@@ -2,9 +2,9 @@
 
 > An AI companion that **never gives answers** — only the questions that lead you to them.
 
-![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python)
-![Flask](https://img.shields.io/badge/Flask-3.0-green?logo=flask)
+![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Ready-brightgreen?logo=github)
 ![Gemini](https://img.shields.io/badge/Google%20Gemini-Free%20API-orange?logo=google)
+![No Server](https://img.shields.io/badge/Server-Not%20Required-blue)
 
 ---
 
@@ -34,45 +34,43 @@ Every AI education tool **gives answers**. But decades of research consistently 
 
 ## Tech Stack
 
-- **Backend:** Python + Flask
-- **AI Engine:** Google Gemini 1.5 Flash (free tier)
-- **Database:** SQLite (local, zero-config)
-- **Frontend:** Vanilla HTML/CSS/JS (no framework bloat)
+- **Hosting:** GitHub Pages (static site — no server needed!)
+- **AI Engine:** Google Gemini API (free tier), called directly from the browser
+- **Storage:** Browser localStorage (all data stays on your machine)
+- **Frontend:** Vanilla HTML/CSS/JS (no framework dependencies)
 
 ## Quick Start
 
-### 1. Get a Free Gemini API Key
-Visit [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey) and create a free API key.
+### Option 1: Use on GitHub Pages (recommended)
 
-### 2. Clone & Setup
+1. Fork or push this repo to GitHub
+2. Go to **Settings → Pages** and set the source to the `main` branch (root `/`)
+3. Visit your GitHub Pages URL
+4. On first visit, you'll be prompted to enter your **free Gemini API key**
+
+### Option 2: Run Locally
+
+Just open `index.html` in your browser — no server needed!
 
 ```bash
+# Clone the repo
+git clone https://github.com/your-username/inrhackzproject.git
 cd inrhackzproject
 
-# Create a virtual environment (recommended)
-python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # Mac/Linux
-
-# Install dependencies
-pip install -r requirements.txt
+# Open in browser (any of these work)
+open index.html          # macOS
+start index.html         # Windows
+xdg-open index.html      # Linux
 ```
 
-### 3. Configure
+### Getting a Free API Key
 
-Edit the `.env` file and replace `your_gemini_api_key_here` with your actual key:
+1. Visit [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+2. Sign in with your Google account
+3. Click **"Create API key"**
+4. Paste it into Socratic when prompted
 
-```
-GEMINI_API_KEY=your_actual_key_here
-```
-
-### 4. Run
-
-```bash
-python app.py
-```
-
-Open [http://localhost:5000](http://localhost:5000) in your browser.
+> **Privacy:** Your API key is stored only in your browser's localStorage. It is never sent anywhere except directly to Google's Gemini API. You can clear it anytime from Settings.
 
 ## How It Works
 
@@ -94,37 +92,30 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 - **Learning Insights Panel:** Real-time view of your correct insights, misconceptions, and gaps
 - **Session Summaries:** AI-generated analysis of what you discovered, what you missed, and what to explore next
 - **Learning History:** Track all past sessions with stats and conversation replay
+- **API Settings:** Configure your API key, model, and temperature from the Settings panel
 
 ## Project Structure
 
 ```
 inrhackzproject/
-├── app.py                    # Flask application (routes + API)
-├── requirements.txt          # Python dependencies
-├── .env                      # API key configuration
-├── models/
-│   └── database.py           # SQLAlchemy models
-├── services/
-│   └── ai_service.py         # Gemini AI integration (Socratic engine)
-├── templates/
-│   ├── base.html             # Base template
-│   ├── index.html            # Landing page
-│   ├── session.html          # Active learning session
-│   ├── history.html          # Session history
-│   └── review.html           # Session review/summary
-└── static/
-    ├── css/
-    │   └── style.css         # Complete stylesheet
-    └── js/
-        ├── index.js          # Landing page logic
-        ├── session.js        # Session interaction logic
-        ├── history.js        # History page logic
-        └── review.js         # Review page logic
+├── index.html                # Landing page
+├── session.html              # Active learning session
+├── history.html              # Session history
+├── review.html               # Session review/summary
+├── css/
+│   └── style.css             # Complete stylesheet
+└── js/
+    ├── storage.js            # localStorage data layer
+    ├── gemini-api.js         # Client-side Gemini API service
+    ├── index.js              # Landing page logic
+    ├── session.js            # Session interaction logic
+    ├── history.js            # History page logic
+    └── review.js             # Review page logic
 ```
 
 ## The AI Engine
 
-The core innovation is in the **system prompt engineering** within `services/ai_service.py`. The AI is constrained to:
+The core innovation is in the **system prompt engineering** within `js/gemini-api.js`. The AI is constrained to:
 
 - **Never answer directly** — every response is a question
 - **Track understanding signals** — correct insights, misconceptions, gaps
@@ -133,6 +124,15 @@ The core innovation is in the **system prompt engineering** within `services/ai_
 - **Follow pedagogical principles** — Bloom's taxonomy-aligned difficulty levels
 
 All AI responses are structured JSON, enabling the frontend to parse and visualize learning progress in real-time.
+
+## Settings
+
+Click the **⚙️ Settings** button on the main page to:
+
+- **Change your API key** — update or replace your Gemini API key
+- **Switch models** — choose between Gemini 2.0 Flash, Flash Lite, 1.5 Flash, or 1.5 Pro
+- **Adjust temperature** — control how creative vs. focused the AI responses are
+- **Clear all data** — reset everything including session history and API key
 
 ## License
 

@@ -1,8 +1,17 @@
-{% extends "base.html" %}
-{% block content %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socratic — Session Review</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+</head>
+<body>
 <div class="app-container review-page">
     <header class="page-header">
-        <a href="/history" class="back-link">← Back to History</a>
+        <a href="history.html" class="back-link">← Back to History</a>
         <div class="brand-inline">
             <div class="brand-icon-small">σ</div>
             <h1>Session Review</h1>
@@ -11,26 +20,26 @@
 
     <!-- Session Summary Card -->
     <div class="review-hero" id="reviewHero">
-        <h2 id="reviewTopic">{{ session.topic }}</h2>
+        <h2 id="reviewTopic">Loading...</h2>
         <div class="review-stats">
             <div class="review-stat">
-                <span class="review-stat-value" id="reviewScore">{{ session.final_understanding_score }}%</span>
+                <span class="review-stat-value" id="reviewScore">0%</span>
                 <span class="review-stat-label">Understanding</span>
             </div>
             <div class="review-stat">
-                <span class="review-stat-value" id="reviewExchanges">{{ session.total_exchanges }}</span>
+                <span class="review-stat-value" id="reviewExchanges">0</span>
                 <span class="review-stat-label">Exchanges</span>
             </div>
             <div class="review-stat">
-                <span class="review-stat-value" id="reviewDuration">{{ session.duration_minutes }}m</span>
+                <span class="review-stat-value" id="reviewDuration">0m</span>
                 <span class="review-stat-label">Duration</span>
             </div>
             <div class="review-stat">
-                <span class="review-stat-value" id="reviewDifficulty">{{ session.highest_difficulty }}</span>
+                <span class="review-stat-value" id="reviewDifficulty">foundational</span>
                 <span class="review-stat-label">Peak Level</span>
             </div>
             <div class="review-stat">
-                <span class="review-stat-value" id="reviewHints">{{ session.hints_used }}</span>
+                <span class="review-stat-value" id="reviewHints">0</span>
                 <span class="review-stat-label">Hints Used</span>
             </div>
         </div>
@@ -70,13 +79,12 @@
 
     <!-- Actions -->
     <div class="review-actions">
-        <a href="/" class="btn-primary">Start New Session</a>
-        <button id="deleteSession" class="btn-danger btn-small" data-id="{{ session.id }}">Delete Session</button>
+        <a href="index.html" class="btn-primary">Start New Session</a>
+        <button id="deleteSession" class="btn-danger btn-small">Delete Session</button>
     </div>
 </div>
 
-<script>
-    const SESSION_ID = "{{ session.id }}";
-</script>
-<script src="/static/js/review.js"></script>
-{% endblock %}
+<script src="js/storage.js"></script>
+<script src="js/review.js"></script>
+</body>
+</html>
