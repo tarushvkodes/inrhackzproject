@@ -1,12 +1,10 @@
 /**
- * Socratic — Active Learning Session Logic (Static / GitHub Pages version)
- * All data stored in localStorage, Gemini API called directly from browser.
+ * Socratic — Active Learning Session Logic
+ * Handles the real-time Socratic dialogue, hints, insights,
+ * understanding tracking, and session management.
  */
 
-// Get session ID from URL query parameter
-const urlParams = new URLSearchParams(window.location.search);
-const SESSION_ID = urlParams.get('id');
-
+// SESSION_ID is injected from the template
 let exchangeCount = 0;
 let currentDifficulty = 'foundational';
 let hintsUsed = 0;
@@ -14,44 +12,19 @@ let allCorrectInsights = [];
 let allMisconceptions = [];
 let allGaps = [];
 
-// Listen for rate-limit events from GeminiAPI and show a countdown toast
-window.addEventListener('gemini-rate-limit', (e) => {
-    const { waitSeconds, model, attempt } = e.detail;
-    showRateLimitToast(`Rate limited — retrying in ${waitSeconds}s (attempt ${attempt}, trying ${model})...`, waitSeconds);
-});
-
-function showRateLimitToast(message, seconds) {
-    let toast = document.getElementById('rateLimitToast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'rateLimitToast';
-        toast.style.cssText = `
-            position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
-            padding:12px 24px;background:var(--warning-bg);color:var(--warning);
-            border:1px solid var(--warning);border-radius:var(--radius-md);
-            font-size:0.9rem;z-index:1000;text-align:center;
-            animation:message-in 0.3s ease;
-        `;
-        document.body.appendChild(toast);
-    }
-    toast.textContent = message;
-    clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => toast.remove(), (seconds + 2) * 1000);
-}
-
 document.addEventListener('DOMContentLoaded', () => {
-    if (!SESSION_ID) {
-        window.location.href = 'index.html';
-        return;
-    }
     loadSession();
     setupEventListeners();
 });
 
 function setupEventListeners() {
+    // Response form
     document.getElementById('responseForm').addEventListener('submit', handleResponse);
+
+    // Hint button
     document.getElementById('hintBtn').addEventListener('click', handleHint);
 
+    // End session
     document.getElementById('endSessionBtn').addEventListener('click', () => {
         document.getElementById('endModal').style.display = 'flex';
     });
@@ -60,16 +33,19 @@ function setupEventListeners() {
     });
     document.getElementById('confirmEnd').addEventListener('click', handleEndSession);
 
+    // Insights panel toggle
     document.getElementById('insightsToggle').addEventListener('click', () => {
         document.getElementById('insightsPanel').classList.toggle('open');
     });
 
+    // Auto-resize textarea
     const textarea = document.getElementById('responseInput');
     textarea.addEventListener('input', () => {
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
     });
 
+    // Submit on Enter (Shift+Enter for newline)
     textarea.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -78,38 +54,36 @@ function setupEventListeners() {
     });
 }
 
-function loadSession() {
-    const session = Storage.getSession(SESSION_ID);
-    if (!session) {
-        addSystemMessage('Session not found. Redirecting...');
-        setTimeout(() => window.location.href = 'index.html', 1500);
-        return;
-    }
+async function loadSession() {
+    try {
+        const res = await fetch(`/api/session/${SESSION_ID}`);
+        const data = await res.json();
 
-    document.getElementById('sessionTopic').textContent = session.topic;
-    exchangeCount = session.total_exchanges;
-    hintsUsed = session.hints_used || 0;
-    if (hintsUsed > 0) {
-        document.getElementById('hintCount').textContent = `(${hintsUsed} used)`;
-    }
+        if (data.success) {
+            const session = data.session;
+            exchangeCount = session.total_exchanges;
 
-    // Render existing conversation
-    const history = session.conversation_history || [];
-    history.forEach(entry => {
-        if (entry.role === 'assistant') {
-            addSocraticMessage(entry.content);
-        } else {
-            addStudentMessage(entry.content);
+            // Render existing conversation
+            const history = session.conversation_history || [];
+            history.forEach(entry => {
+                if (entry.role === 'assistant') {
+                    addSocraticMessage(entry.content);
+                } else {
+                    addStudentMessage(entry.content);
+                }
+            });
+
+            // Update UI from last AI message
+            const lastAI = [...history].reverse().find(e => e.role === 'assistant');
+            if (lastAI && lastAI.content) {
+                updateUI(lastAI.content);
+            }
+
+            scrollToBottom();
         }
-    });
-
-    // Update UI from last AI message
-    const lastAI = [...history].reverse().find(e => e.role === 'assistant');
-    if (lastAI && lastAI.content) {
-        updateUI(lastAI.content);
+    } catch (err) {
+        addSystemMessage('Failed to load session. Please refresh.');
     }
-
-    scrollToBottom();
 }
 
 async function handleResponse(e) {
@@ -118,56 +92,37 @@ async function handleResponse(e) {
     const response = input.value.trim();
     if (!response) return;
 
+    // Show student message
     addStudentMessage(response);
     input.value = '';
     input.style.height = 'auto';
 
+    // Show thinking indicator
     const thinking = addThinkingIndicator();
+
     const btn = document.getElementById('submitBtn');
     setButtonLoading(btn, true);
 
     try {
-        const session = Storage.getSession(SESSION_ID);
-        const convHistory = session.conversation_history || [];
+        const res = await fetch(`/api/session/${SESSION_ID}/respond`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ response })
+        });
 
-        // Add student response to history
-        convHistory.push({ role: 'user', content: response });
-
-        // Call Gemini API
-        const result = await GeminiAPI.continueDialogue(session.topic, convHistory, response);
+        const data = await res.json();
         thinking.remove();
 
-        if (result.success) {
-            const aiData = result.data;
+        if (data.success) {
             exchangeCount++;
-
-            // Add AI response to history
-            convHistory.push({ role: 'assistant', content: aiData });
-
-            // Update session in storage
-            const score = aiData.understanding_score || 0;
-            const difficulty = aiData.difficulty_level || 'foundational';
-            const difficultyOrder = ['foundational', 'intermediate', 'advanced', 'mastery'];
-            const currentIdx = difficultyOrder.indexOf(session.highest_difficulty || 'foundational');
-            const newIdx = difficultyOrder.indexOf(difficulty);
-
-            Storage.updateSession(SESSION_ID, {
-                conversation_history: convHistory,
-                total_exchanges: exchangeCount,
-                final_understanding_score: Math.max(session.final_understanding_score || 0, score),
-                highest_difficulty: newIdx > currentIdx ? difficulty : session.highest_difficulty,
-            });
-
-            addSocraticMessage(aiData);
-            updateUI(aiData);
+            addSocraticMessage(data.data);
+            updateUI(data.data);
         } else {
-            // Still save the student message
-            Storage.updateSession(SESSION_ID, { conversation_history: convHistory });
-            addSystemMessage(result.error || 'Failed to get response. Try again.');
+            addSystemMessage(data.error || 'Failed to get response. Try again.');
         }
     } catch (err) {
         thinking.remove();
-        addSystemMessage('Unexpected error. Please check your connection.');
+        addSystemMessage('Network error. Please check your connection.');
     } finally {
         setButtonLoading(btn, false);
         input.focus();
@@ -180,26 +135,17 @@ async function handleHint() {
     btn.disabled = true;
 
     try {
-        const session = Storage.getSession(SESSION_ID);
-        const convHistory = session.conversation_history || [];
+        const res = await fetch(`/api/session/${SESSION_ID}/hint`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
 
-        // Find current question
-        let currentQuestion = '';
-        for (let i = convHistory.length - 1; i >= 0; i--) {
-            if (convHistory[i].role === 'assistant') {
-                const content = convHistory[i].content;
-                currentQuestion = typeof content === 'object' ? (content.question || '') : content;
-                break;
-            }
-        }
+        const data = await res.json();
 
-        const result = await GeminiAPI.getHint(session.topic, convHistory, currentQuestion);
-
-        if (result.success && result.data) {
+        if (data.success && data.data) {
             hintsUsed++;
             document.getElementById('hintCount').textContent = `(${hintsUsed} used)`;
-            Storage.updateSession(SESSION_ID, { hints_used: hintsUsed });
-            addHintMessage(result.data.hint);
+            addHintMessage(data.data.hint);
             scrollToBottom();
         }
     } catch (err) {
@@ -215,55 +161,51 @@ async function handleEndSession() {
     btn.disabled = true;
 
     try {
-        const session = Storage.getSession(SESSION_ID);
-        const convHistory = session.conversation_history || [];
+        const res = await fetch(`/api/session/${SESSION_ID}/end`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
 
-        const summaryResult = await GeminiAPI.generateSessionSummary(session.topic, convHistory);
+        const data = await res.json();
 
-        const updates = {
-            is_active: false,
-            ended_at: new Date().toISOString(),
-        };
-
-        if (summaryResult.success) {
-            updates.summary = summaryResult.data;
-            updates.final_understanding_score = summaryResult.data.overall_understanding || session.final_understanding_score;
+        if (data.success) {
+            window.location.href = `/review/${SESSION_ID}`;
+        } else {
+            btn.textContent = 'Generate Summary';
+            btn.disabled = false;
+            addSystemMessage('Failed to end session. Try again.');
+            document.getElementById('endModal').style.display = 'none';
         }
-
-        Storage.updateSession(SESSION_ID, updates);
-
-        // Update global stats
-        const updatedSession = Storage.getSession(SESSION_ID);
-        Storage.updateStatsOnSessionEnd(updatedSession);
-
-        window.location.href = `review.html?id=${SESSION_ID}`;
     } catch (err) {
         btn.textContent = 'Generate Summary';
         btn.disabled = false;
-        addSystemMessage('Failed to end session. Try again.');
-        document.getElementById('endModal').style.display = 'none';
     }
 }
 
 // ─── UI Update Functions ───
 
 function updateUI(aiData) {
+    // Update understanding gauge
     const score = aiData.understanding_score || 0;
     document.getElementById('gaugeFill').setAttribute('stroke-dasharray', `${score}, 100`);
     document.getElementById('gaugeText').textContent = score + '%';
 
+    // Update gauge color based on score
     const fill = document.getElementById('gaugeFill');
     if (score >= 80) fill.style.stroke = 'var(--success)';
     else if (score >= 50) fill.style.stroke = 'var(--accent-warm)';
     else fill.style.stroke = 'var(--accent-primary)';
 
+    // Update difficulty level
     const difficulty = aiData.difficulty_level || 'foundational';
     currentDifficulty = difficulty;
     updateDifficultyProgress(difficulty);
 
+    // Update session meta
     document.getElementById('sessionMeta').textContent =
         `Exchange ${exchangeCount + 1} · ${capitalize(difficulty)}`;
 
+    // Update insights
     const signals = aiData.understanding_signals || {};
     if (signals.correct_insights) {
         signals.correct_insights.forEach(i => {
@@ -299,13 +241,21 @@ function updateInsightsPanel() {
     const gapsList = document.getElementById('gaps');
 
     if (allCorrectInsights.length > 0) {
-        correctList.innerHTML = allCorrectInsights.map(i => `<li>${escapeHtml(i)}</li>`).join('');
+        correctList.innerHTML = allCorrectInsights.map(i =>
+            `<li>${escapeHtml(i)}</li>`
+        ).join('');
     }
+
     if (allMisconceptions.length > 0) {
-        miscList.innerHTML = allMisconceptions.map(i => `<li>${escapeHtml(i)}</li>`).join('');
+        miscList.innerHTML = allMisconceptions.map(i =>
+            `<li>${escapeHtml(i)}</li>`
+        ).join('');
     }
+
     if (allGaps.length > 0) {
-        gapsList.innerHTML = allGaps.map(i => `<li>${escapeHtml(i)}</li>`).join('');
+        gapsList.innerHTML = allGaps.map(i =>
+            `<li>${escapeHtml(i)}</li>`
+        ).join('');
     }
 }
 
@@ -323,9 +273,11 @@ function addSocraticMessage(content) {
         <div class="message-label">Socratic</div>
         <div class="message-question">${escapeHtml(question)}</div>
     `;
+
     if (encouragement) {
         html += `<div class="message-encouragement">${escapeHtml(encouragement)}</div>`;
     }
+
     div.innerHTML = html;
     area.appendChild(div);
 }
@@ -385,12 +337,12 @@ function setButtonLoading(btn, loading) {
     const text = btn.querySelector('.btn-text');
     const loader = btn.querySelector('.btn-loading');
     if (loading) {
-        if (text) text.style.display = 'none';
-        if (loader) loader.style.display = 'inline-flex';
+        text.style.display = 'none';
+        loader.style.display = 'inline-flex';
         btn.disabled = true;
     } else {
-        if (text) text.style.display = 'inline';
-        if (loader) loader.style.display = 'none';
+        text.style.display = 'inline';
+        loader.style.display = 'none';
         btn.disabled = false;
     }
 }

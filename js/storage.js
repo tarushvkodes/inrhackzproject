@@ -32,7 +32,7 @@ const Storage = {
 
     // ─── Model Settings ───
     getModel() {
-        return localStorage.getItem(STORAGE_KEYS.MODEL) || 'gemini-2.0-flash';
+        return localStorage.getItem(STORAGE_KEYS.MODEL) || 'gemini-2.5-flash-lite';
     },
 
     setModel(model) {

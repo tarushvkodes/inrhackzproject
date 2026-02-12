@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="app-container">
+    <header class="page-header">
+        <a href="/" class="back-link">← Back</a>
+        <div class="brand-inline">
+            <div class="brand-icon-small">σ</div>
+            <h1>Learning History</h1>
+        </div>
+    </header>
+
+    <!-- Filters -->
+    <div class="history-filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="active">Active</button>
+        <button class="filter-btn" data-filter="completed">Completed</button>
+    </div>
+
+    <!-- Sessions List -->
+    <div class="history-list" id="historyList">
+        <div class="loading-state">
+            <span class="spinner"></span>
+            <p>Loading sessions...</p>
+        </div>
+    </div>
+
+    <!-- Empty State -->
+    <div class="empty-state" id="emptyState" style="display:none;">
+        <div class="empty-icon">σ</div>
+        <h3>No sessions yet</h3>
+        <p>Start your first Socratic learning session to see your history here.</p>
+        <a href="/" class="btn-primary">Start Learning</a>
+    </div>
+</div>
+
+<script src="/static/js/history.js"></script>
+{% endblock %}

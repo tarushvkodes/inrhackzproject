@@ -3,6 +3,12 @@
  * Uses localStorage for data and calls Gemini API directly from browser.
  */
 
+// Listen for rate-limit events from GeminiAPI and show a countdown toast
+window.addEventListener('gemini-rate-limit', (e) => {
+    const { waitSeconds, model, attempt } = e.detail;
+    showError(`Rate limited — retrying in ${waitSeconds}s (trying ${model}, attempt ${attempt})...`);
+});
+
 document.addEventListener('DOMContentLoaded', () => {
     checkApiKey();
     loadStats();
@@ -44,6 +50,11 @@ function setupSetupModal() {
         const result = await GeminiAPI.validateApiKey(key);
         if (result.success) {
             Storage.setApiKey(key);
+            // Auto-select the first working model
+            if (result.workingModels && result.workingModels.length > 0) {
+                Storage.setModel(result.workingModels[0]);
+                console.log('Working models:', result.workingModels);
+            }
             document.getElementById('setupModal').style.display = 'none';
             loadSuggestions();
         } else {
@@ -143,7 +154,7 @@ function setupEventListeners() {
         }
     });
 
-    document.getElementById('refreshSuggestions').addEventListener('click', loadSuggestions);
+    document.getElementById('refreshSuggestions').addEventListener('click', refreshSuggestionsFromAPI);
 }
 
 async function handleStartSession(e) {
@@ -196,7 +207,22 @@ function loadStats() {
     document.getElementById('statUnderstanding').textContent = (s.average_understanding || 0) + '%';
 }
 
-async function loadSuggestions() {
+// Default suggestions shown instantly — no API call needed
+const DEFAULT_SUGGESTIONS = [
+    { topic: 'How does photosynthesis work?', description: 'Discover how plants turn sunlight into food.', category: 'Biology', difficulty: 'beginner' },
+    { topic: 'What is recursion?', description: 'A function that calls itself — but why?', category: 'Computer Science', difficulty: 'intermediate' },
+    { topic: 'Why does time slow near a black hole?', description: 'Explore Einstein\'s mind-bending spacetime.', category: 'Physics', difficulty: 'advanced' },
+    { topic: 'How do vaccines train your immune system?', description: 'The elegant trick behind modern medicine.', category: 'Medicine', difficulty: 'beginner' },
+    { topic: 'What makes a market crash?', description: 'Psychology, panic, and feedback loops.', category: 'Economics', difficulty: 'intermediate' },
+    { topic: 'Is mathematics discovered or invented?', description: 'A philosophical question with no easy answer.', category: 'Philosophy', difficulty: 'advanced' },
+];
+
+function loadSuggestions() {
+    // Show hardcoded suggestions instantly — saves API quota
+    renderSuggestions(DEFAULT_SUGGESTIONS);
+}
+
+async function refreshSuggestionsFromAPI() {
     const grid = document.getElementById('suggestionsGrid');
 
     if (!Storage.isApiKeyConfigured()) {
@@ -210,31 +236,36 @@ async function loadSuggestions() {
         const data = await GeminiAPI.generateTopicSuggestions('');
 
         if (data.success && data.data && data.data.suggestions) {
-            grid.innerHTML = '';
-            data.data.suggestions.forEach(s => {
-                const card = document.createElement('div');
-                card.className = 'suggestion-card';
-                card.innerHTML = `
-                    <div class="topic-name">${escapeHtml(s.topic)}</div>
-                    <div class="topic-desc">${escapeHtml(s.description)}</div>
-                    <div class="topic-meta">
-                        <span class="topic-tag">${escapeHtml(s.category || '')}</span>
-                        <span class="topic-tag">${escapeHtml(s.difficulty || '')}</span>
-                    </div>
-                `;
-                card.addEventListener('click', () => {
-                    document.getElementById('topicInput').value = s.topic;
-                    document.getElementById('topicInput').focus();
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                });
-                grid.appendChild(card);
-            });
+            renderSuggestions(data.data.suggestions);
         } else {
-            grid.innerHTML = '<p style="color:var(--text-muted);text-align:center;">Could not load suggestions. Type any topic above!</p>';
+            renderSuggestions(DEFAULT_SUGGESTIONS);
         }
     } catch (err) {
-        grid.innerHTML = '<p style="color:var(--text-muted);text-align:center;">Enter any topic above to begin learning.</p>';
+        renderSuggestions(DEFAULT_SUGGESTIONS);
     }
+}
+
+function renderSuggestions(suggestions) {
+    const grid = document.getElementById('suggestionsGrid');
+    grid.innerHTML = '';
+    suggestions.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'suggestion-card';
+        card.innerHTML = `
+            <div class="topic-name">${escapeHtml(s.topic)}</div>
+            <div class="topic-desc">${escapeHtml(s.description)}</div>
+            <div class="topic-meta">
+                <span class="topic-tag">${escapeHtml(s.category || '')}</span>
+                <span class="topic-tag">${escapeHtml(s.difficulty || '')}</span>
+            </div>
+        `;
+        card.addEventListener('click', () => {
+            document.getElementById('topicInput').value = s.topic;
+            document.getElementById('topicInput').focus();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        grid.appendChild(card);
+    });
 }
 
 function loadRecentSessions() {

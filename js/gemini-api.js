@@ -1,266 +1,285 @@
 /**
  * Socratic — Client-Side Gemini API Service
- * Calls Google Gemini REST API directly from the browser.
- * Replaces the server-side ai_service.py.
+ * Probes available models at setup time so we never pick one with zero quota.
+ * Uses systemInstruction + multi-turn format to minimise tokens.
  */
 
 const GeminiAPI = {
-    // ─── System Prompts ───
+    // ─── Config ───
+    _lastRequestTime: 0,
+    _minRequestGap: 4000,       // 4 s between requests
+    _requestQueue: Promise.resolve(),
+    _maxHistory: 10,            // Only send last N conversation turns
 
-    SOCRATIC_SYSTEM_PROMPT: `You are Socratic, an AI learning companion that NEVER gives direct answers.
-You implement the Socratic method: you guide students to discover understanding through carefully crafted questions.
+    // Every model we might try, in preference order
+    ALL_MODELS: [
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-2.0-flash',
+    ],
 
-## YOUR CORE RULES:
-1. NEVER directly answer a student's question or explain a concept outright.
-2. ALWAYS respond with a guiding question that leads the student closer to understanding.
-3. If a student gives a correct insight, acknowledge it briefly and push deeper with a harder question.
-4. If a student reveals a misconception, gently probe it with a question that exposes the flaw.
-5. If a student is stuck, break the problem into a simpler sub-question.
-6. Track the student's understanding level throughout the conversation.
+    // ─── System Prompts (compact) ───
 
-## YOUR RESPONSE FORMAT (strict JSON):
-{
-    "question": "Your Socratic question to the student",
-    "thinking": "Brief internal reasoning about the student's current understanding (hidden from student)",
-    "understanding_signals": {
-        "correct_insights": ["list of correct things the student has demonstrated"],
-        "misconceptions": ["list of misconceptions detected"],
-        "gaps": ["knowledge gaps still to be explored"]
-    },
-    "understanding_score": 0,
-    "difficulty_level": "foundational",
-    "hint_available": true,
-    "encouragement": "A brief encouraging note about their progress (1 sentence max)"
-}
+    SOCRATIC_SYSTEM_PROMPT: `You are Socratic. NEVER give direct answers. Guide via questions only.
+If correct go deeper. If wrong probe the flaw. If stuck simplify.
+Respond ONLY with this JSON:
+{"question":"","thinking":"","understanding_signals":{"correct_insights":[],"misconceptions":[],"gaps":[]},"understanding_score":0,"difficulty_level":"foundational","hint_available":true,"encouragement":""}
+understanding_score: 0-100. difficulty_level: foundational|intermediate|advanced|mastery.
+Progress difficulty as student improves. Be warm but rigorous.`,
 
-understanding_score is an integer from 0 to 100.
-difficulty_level is one of: foundational, intermediate, advanced, mastery.
+    HINT_SYSTEM_PROMPT: `Give a 1-2 sentence HINT (not answer). JSON only: {"hint":"your hint"}`,
 
-## DIFFICULTY PROGRESSION:
-- foundational: Basic recall and definition-level questions
-- intermediate: Application and analysis questions
-- advanced: Synthesis and evaluation questions
-- mastery: Questions requiring transfer to novel contexts
+    SUMMARY_SYSTEM_PROMPT: `Summarize this learning session. JSON only:
+{"topic_summary":"","key_discoveries":[],"misconceptions_addressed":[],"remaining_gaps":[],"overall_understanding":0,"recommended_next_topics":[],"learning_style_notes":"","time_well_spent_score":0}
+Scores 0-100.`,
 
-## IMPORTANT BEHAVIORS:
-- Start with foundational questions to gauge baseline understanding
-- Progressively increase difficulty as the student demonstrates understanding
-- If the student answers 3+ questions correctly at a level, move to the next
-- If the student struggles, decompose into simpler sub-questions
-- Be warm but intellectually rigorous
-- Keep questions concise and focused
-- Reference the student's previous answers to build continuity`,
+    // ─── Model probing ───
 
-    HINT_SYSTEM_PROMPT: `You are providing a HINT (not an answer) to help a stuck student.
-The hint should:
-1. Point them in the right direction without giving the full answer
-2. Reference something they might already know
-3. Suggest an analogy or simpler related concept
-4. Be 1-2 sentences maximum
-
-Respond with valid JSON only: {"hint": "your hint text"}`,
-
-    SUMMARY_SYSTEM_PROMPT: `You are summarizing a Socratic learning session.
-Analyze the conversation and provide a comprehensive learning summary.
-
-Respond with valid JSON only:
-{
-    "topic_summary": "What the session covered (2-3 sentences)",
-    "key_discoveries": ["Things the student discovered through questioning"],
-    "misconceptions_addressed": ["Misconceptions that were identified and corrected"],
-    "remaining_gaps": ["Areas that still need exploration"],
-    "overall_understanding": 0,
-    "recommended_next_topics": ["Topics to explore next"],
-    "learning_style_notes": "Observations about how this student learns best (1-2 sentences)",
-    "time_well_spent_score": 0
-}
-
-overall_understanding and time_well_spent_score are integers from 0 to 100.`,
-
-    // ─── Core API Call ───
-
-    async _callGemini(systemPrompt, userPrompt, temperature = null) {
-        const apiKey = Storage.getApiKey();
-        if (!apiKey) {
-            return { success: false, error: 'API key not configured. Please set your Gemini API key in Settings.' };
-        }
-
-        const model = Storage.getModel();
-        const temp = temperature !== null ? temperature : Storage.getTemperature();
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-        const body = {
-            contents: [{
-                parts: [{ text: systemPrompt + '\n\n---\n\n' + userPrompt }]
-            }],
-            generationConfig: {
-                temperature: temp,
-                topP: 0.95,
-                maxOutputTokens: 1024,
-                responseMimeType: 'application/json',
-            }
-        };
-
+    /**
+     * Validate the API key AND probe which models actually have quota.
+     * Returns { success, error?, workingModels? }
+     */
+    async validateApiKey(apiKey) {
+        // First check the key is valid at all
         try {
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
             if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                const msg = errData?.error?.message || `API error (${res.status})`;
-                return { success: false, error: msg };
+                const d = await res.json().catch(() => ({}));
+                return { success: false, error: d?.error?.message || 'Invalid API key' };
+            }
+        } catch (e) {
+            return { success: false, error: 'Network error. Check your connection.' };
+        }
+
+        // Now probe each model with a tiny request to see which ones work
+        const workingModels = [];
+        for (const model of this.ALL_MODELS) {
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                const probeRes = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
+                        generationConfig: { maxOutputTokens: 1 },
+                    }),
+                });
+                if (probeRes.ok) {
+                    workingModels.push(model);
+                } else {
+                    const err = await probeRes.json().catch(() => ({}));
+                    const msg = err?.error?.message || '';
+                    // If it's NOT a rate/quota error, the model might still work later
+                    if (!msg.toLowerCase().includes('limit: 0') &&
+                        !msg.toLowerCase().includes('quota') &&
+                        probeRes.status !== 429) {
+                        workingModels.push(model);
+                    } else {
+                        console.warn(`Model ${model} has no quota: ${msg}`);
+                    }
+                }
+                // Small pause between probes to not hit rate limits during probing
+                await new Promise(r => setTimeout(r, 1500));
+            } catch (e) {
+                // Network error during probe — assume model might work
+                workingModels.push(model);
+            }
+        }
+
+        if (workingModels.length === 0) {
+            return {
+                success: false,
+                error: 'Your API key is valid but all models have zero quota. Try creating a new API key at aistudio.google.com/apikey, or wait for your daily quota to reset (midnight Pacific time).'
+            };
+        }
+
+        // Save working models list
+        localStorage.setItem('socratic_working_models', JSON.stringify(workingModels));
+
+        return { success: true, workingModels };
+    },
+
+    /** Get models that were confirmed working during key validation. */
+    _getWorkingModels() {
+        try {
+            const saved = localStorage.getItem('socratic_working_models');
+            if (saved) return JSON.parse(saved);
+        } catch (e) {}
+        return this.ALL_MODELS; // fallback to trying everything
+    },
+
+    // ─── Internals ───
+
+    _enqueue(fn) {
+        this._requestQueue = this._requestQueue.then(async () => {
+            const now = Date.now();
+            const wait = this._minRequestGap - (now - this._lastRequestTime);
+            if (wait > 0) await new Promise(r => setTimeout(r, wait));
+            this._lastRequestTime = Date.now();
+            return fn();
+        });
+        return this._requestQueue;
+    },
+
+    _isRateLimitError(status, msg) {
+        if (status === 429) return true;
+        if (typeof msg === 'string') {
+            const l = msg.toLowerCase();
+            return l.includes('quota') || l.includes('rate') || l.includes('resource_exhausted');
+        }
+        return false;
+    },
+
+    async _rawFetch(model, apiKey, body) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+    },
+
+    _buildBody(systemText, contents, temperature) {
+        const body = {
+            contents,
+            generationConfig: {
+                temperature,
+                maxOutputTokens: 300,
+                responseMimeType: 'application/json',
+            },
+        };
+        if (systemText) {
+            body.systemInstruction = { parts: [{ text: systemText }] };
+        }
+        return body;
+    },
+
+    /**
+     * Core call: tries each working model in order.
+     * On rate-limit → immediately skip to next model (no waiting).
+     * On success → return.
+     */
+    async _callGemini(systemPrompt, contents, temperature = null) {
+        const apiKey = Storage.getApiKey();
+        if (!apiKey) return { success: false, error: 'API key not configured.' };
+
+        const temp = temperature !== null ? temperature : Storage.getTemperature();
+        const turns = Array.isArray(contents)
+            ? contents
+            : [{ role: 'user', parts: [{ text: contents }] }];
+        const body = this._buildBody(systemPrompt, turns, temp);
+
+        // Use working models list; put user's preferred model first
+        const preferred = Storage.getModel();
+        const working = this._getWorkingModels();
+        const modelsToTry = [preferred, ...working.filter(m => m !== preferred)];
+
+        return this._enqueue(async () => {
+            let lastError = '';
+
+            for (const model of modelsToTry) {
+                try {
+                    const res = await this._rawFetch(model, apiKey, body);
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                        const parsed = this._parseJSON(text);
+                        if (model !== preferred) parsed._usedModel = model;
+                        return { success: true, data: parsed };
+                    }
+
+                    const errData = await res.json().catch(() => ({}));
+                    const errMsg = errData?.error?.message || `API error (${res.status})`;
+
+                    if (this._isRateLimitError(res.status, errMsg)) {
+                        // Don't wait — just try the next model immediately
+                        console.warn(`${model} rate-limited, trying next model...`);
+                        window.dispatchEvent(new CustomEvent('gemini-rate-limit', {
+                            detail: { waitSeconds: 0, model, attempt: 1 }
+                        }));
+                        lastError = errMsg;
+                        continue;
+                    }
+
+                    // Non-rate-limit error
+                    return { success: false, error: errMsg };
+                } catch (e) {
+                    lastError = e.message || 'Network error.';
+                    continue;
+                }
             }
 
-            const data = await res.json();
-            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            const parsed = this._parseJSON(text);
-            return { success: true, data: parsed };
-        } catch (e) {
-            return { success: false, error: e.message || 'Network error calling Gemini API.' };
-        }
+            // All models failed — give the user actionable advice
+            return {
+                success: false,
+                error: `All models are rate-limited. This usually means your daily free-tier quota is used up.\n\nFix options:\n1. Wait until your quota resets (midnight Pacific time)\n2. Create a new API key at aistudio.google.com/apikey\n3. Enable billing on your Google Cloud project for higher limits\n\nLast error: ${lastError}`
+            };
+        });
     },
 
     _parseJSON(text) {
-        let cleaned = text.trim();
-        if (cleaned.startsWith('```')) {
-            const firstNL = cleaned.indexOf('\n');
-            cleaned = cleaned.substring(firstNL + 1);
-        }
-        if (cleaned.endsWith('```')) {
-            cleaned = cleaned.slice(0, -3).trim();
-        }
-        return JSON.parse(cleaned);
+        let c = text.trim();
+        if (c.startsWith('```')) c = c.substring(c.indexOf('\n') + 1);
+        if (c.endsWith('```')) c = c.slice(0, -3).trim();
+        return JSON.parse(c);
     },
 
     // ─── Public Methods ───
 
-    async validateApiKey(apiKey) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-        try {
-            const res = await fetch(url);
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                return { success: false, error: errData?.error?.message || 'Invalid API key' };
-            }
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: 'Network error. Check your connection.' };
-        }
-    },
-
     async startSession(topic, context) {
-        const userPrompt = `A student wants to learn about: ${topic}\n\nAdditional context from the student: ${context || 'None provided'}\n\nBegin the Socratic dialogue. Start with a foundational question to gauge their current understanding of this topic. Remember: do NOT explain the topic - ask a question that reveals what they already know.`;
-        return this._callGemini(this.SOCRATIC_SYSTEM_PROMPT, userPrompt);
+        const prompt = `Topic: ${topic}\nContext: ${context || 'None'}\nAsk one foundational question to gauge what I know. Do NOT explain the topic.`;
+        return this._callGemini(this.SOCRATIC_SYSTEM_PROMPT, prompt);
     },
 
     async continueDialogue(topic, conversationHistory, studentResponse) {
-        const parts = [this.SOCRATIC_SYSTEM_PROMPT, '\n---\n'];
-        parts.push(`Topic being explored: ${topic}\n`);
+        const contents = [];
+        const trimmed = conversationHistory.slice(-this._maxHistory);
 
-        for (const entry of conversationHistory) {
+        contents.push({ role: 'user', parts: [{ text: `Topic: ${topic}` }] });
+        contents.push({ role: 'model', parts: [{ text: '{"question":"Let\'s explore this."}' }] });
+
+        for (const entry of trimmed) {
             if (entry.role === 'assistant') {
-                const content = entry.content;
-                if (typeof content === 'object') {
-                    parts.push(`Socratic (you previously asked): ${content.question || ''}`);
-                } else {
-                    parts.push(`Socratic (you previously asked): ${content}`);
-                }
+                const q = typeof entry.content === 'object'
+                    ? (entry.content.question || JSON.stringify(entry.content))
+                    : String(entry.content);
+                contents.push({ role: 'model', parts: [{ text: q }] });
             } else {
-                parts.push(`Student responded: ${entry.content}`);
+                contents.push({ role: 'user', parts: [{ text: String(entry.content) }] });
             }
         }
+        contents.push({ role: 'user', parts: [{ text: studentResponse }] });
 
-        parts.push(`\nStudent's latest response: ${studentResponse}`);
-        parts.push('\nAnalyze their response for understanding, misconceptions, and gaps. Then ask your next Socratic question. Remember: NEVER give the answer directly. Respond with valid JSON only.');
-
-        const fullPrompt = parts.join('\n');
-
-        try {
-            const model = Storage.getModel();
-            const temp = Storage.getTemperature();
-            const apiKey = Storage.getApiKey();
-            if (!apiKey) {
-                return { success: false, error: 'API key not configured.' };
-            }
-
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-            const body = {
-                contents: [{ parts: [{ text: fullPrompt }] }],
-                generationConfig: {
-                    temperature: temp,
-                    topP: 0.95,
-                    maxOutputTokens: 1024,
-                    responseMimeType: 'application/json',
-                }
-            };
-
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                return { success: false, error: errData?.error?.message || `API error (${res.status})` };
-            }
-
-            const data = await res.json();
-            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            const parsed = this._parseJSON(text);
-            return { success: true, data: parsed };
-        } catch (e) {
-            if (e instanceof SyntaxError) {
-                return { success: false, error: 'Failed to parse AI response as JSON: ' + e.message };
-            }
-            return { success: false, error: e.message || 'Network error.' };
-        }
+        return this._callGemini(this.SOCRATIC_SYSTEM_PROMPT, contents);
     },
 
     async getHint(topic, conversationHistory, currentQuestion) {
-        let context = `Topic: ${topic}\nCurrent question the student is stuck on: ${currentQuestion}\n\n`;
-        context += 'Recent conversation:\n';
-        const recent = conversationHistory.slice(-6);
-        for (const entry of recent) {
-            const role = entry.role === 'assistant' ? 'Socratic' : 'Student';
-            const content = typeof entry.content === 'string' ? entry.content : (entry.content.question || '');
-            context += `${role}: ${content}\n`;
+        const recent = conversationHistory.slice(-4);
+        let ctx = `Topic: ${topic}\nQuestion: ${currentQuestion}\n`;
+        for (const e of recent) {
+            const r = e.role === 'assistant' ? 'Q' : 'A';
+            const c = typeof e.content === 'string' ? e.content : (e.content.question || '');
+            ctx += `${r}: ${c}\n`;
         }
-        context += '\nProvide a helpful hint. Respond with valid JSON only.';
-
-        return this._callGemini(this.HINT_SYSTEM_PROMPT, context);
+        return this._callGemini(this.HINT_SYSTEM_PROMPT, ctx);
     },
 
     async generateSessionSummary(topic, conversationHistory) {
-        let context = `Topic: ${topic}\n\nFull conversation:\n`;
-        for (const entry of conversationHistory) {
-            const role = entry.role === 'assistant' ? 'Socratic' : 'Student';
-            let content;
-            if (typeof entry.content === 'object') {
-                content = entry.content.question || JSON.stringify(entry.content);
-            } else {
-                content = String(entry.content);
-            }
-            context += `${role}: ${content}\n`;
+        const trimmed = conversationHistory.slice(-12);
+        let ctx = `Topic: ${topic}\n`;
+        for (const e of trimmed) {
+            const r = e.role === 'assistant' ? 'Q' : 'A';
+            const c = typeof e.content === 'object' ? (e.content.question || '') : String(e.content);
+            ctx += `${r}: ${c}\n`;
         }
-        context += '\n\nProvide a comprehensive learning session summary. Respond with valid JSON only.';
-
-        return this._callGemini(this.SUMMARY_SYSTEM_PROMPT, context, 0.5);
+        return this._callGemini(this.SUMMARY_SYSTEM_PROMPT, ctx, 0.5);
     },
 
     async generateTopicSuggestions(interests) {
-        const system = 'You suggest fascinating learning topics. Respond with valid JSON only.';
-        let prompt = 'Suggest 6 diverse, interesting topics for Socratic learning exploration.\n';
-        if (interests) {
-            prompt += `The student is interested in: ${interests}\n`;
-        } else {
-            prompt += 'Provide a diverse mix across science, technology, philosophy, mathematics, history, and social sciences.\n';
-        }
-        prompt += '\nRespond with valid JSON:\n{\n    "suggestions": [\n        {"topic": "topic name", "description": "One-line hook that makes it intriguing", "category": "category", "difficulty": "beginner|intermediate|advanced"}\n    ]\n}';
-
-        return this._callGemini(system, prompt, 0.9);
+        const sys = 'Suggest 6 learning topics. JSON: {"suggestions":[{"topic":"","description":"","category":"","difficulty":"beginner|intermediate|advanced"}]}';
+        const prompt = interests ? `Interests: ${interests}` : 'Mix of science, tech, philosophy, math, history.';
+        return this._callGemini(sys, prompt, 0.9);
     },
 };

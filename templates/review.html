@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="app-container review-page">
+    <header class="page-header">
+        <a href="/history" class="back-link">← Back to History</a>
+        <div class="brand-inline">
+            <div class="brand-icon-small">σ</div>
+            <h1>Session Review</h1>
+        </div>
+    </header>
+
+    <!-- Session Summary Card -->
+    <div class="review-hero" id="reviewHero">
+        <h2 id="reviewTopic">{{ session.topic }}</h2>
+        <div class="review-stats">
+            <div class="review-stat">
+                <span class="review-stat-value" id="reviewScore">{{ session.final_understanding_score }}%</span>
+                <span class="review-stat-label">Understanding</span>
+            </div>
+            <div class="review-stat">
+                <span class="review-stat-value" id="reviewExchanges">{{ session.total_exchanges }}</span>
+                <span class="review-stat-label">Exchanges</span>
+            </div>
+            <div class="review-stat">
+                <span class="review-stat-value" id="reviewDuration">{{ session.duration_minutes }}m</span>
+                <span class="review-stat-label">Duration</span>
+            </div>
+            <div class="review-stat">
+                <span class="review-stat-value" id="reviewDifficulty">{{ session.highest_difficulty }}</span>
+                <span class="review-stat-label">Peak Level</span>
+            </div>
+            <div class="review-stat">
+                <span class="review-stat-value" id="reviewHints">{{ session.hints_used }}</span>
+                <span class="review-stat-label">Hints Used</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Summary -->
+    <section class="review-section" id="summarySection">
+        <h3>AI Learning Summary</h3>
+        <div id="summaryContent" class="summary-content">
+            <p class="loading-text">Loading summary...</p>
+        </div>
+    </section>
+
+    <!-- Key Discoveries -->
+    <section class="review-section" id="discoveriesSection">
+        <h3>Key Discoveries</h3>
+        <ul id="discoveryList" class="discovery-list"></ul>
+    </section>
+
+    <!-- Misconceptions Addressed -->
+    <section class="review-section" id="misconceptionsSection">
+        <h3>Misconceptions Addressed</h3>
+        <ul id="misconceptionList" class="misconception-list"></ul>
+    </section>
+
+    <!-- Recommended Next Topics -->
+    <section class="review-section" id="nextSection">
+        <h3>Recommended Next Steps</h3>
+        <div id="nextTopics" class="next-topics"></div>
+    </section>
+
+    <!-- Full Conversation Replay -->
+    <section class="review-section">
+        <h3>Full Conversation</h3>
+        <div id="conversationReplay" class="conversation-replay"></div>
+    </section>
+
+    <!-- Actions -->
+    <div class="review-actions">
+        <a href="/" class="btn-primary">Start New Session</a>
+        <button id="deleteSession" class="btn-danger btn-small" data-id="{{ session.id }}">Delete Session</button>
+    </div>
+</div>
+
+<script>
+    const SESSION_ID = "{{ session.id }}";
+</script>
+<script src="/static/js/review.js"></script>
+{% endblock %}
