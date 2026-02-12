@@ -13,7 +13,7 @@
 
     <section class="topic-section">
         <div class="topic-card" style="max-width: 540px; margin: 0 auto;">
-            <h2>Enter Your Gemini API Key</h2>
+            <h2>Enter Your OpenRouter API Key</h2>
 
             <div class="setup-trust-badges">
                 <div class="trust-badge">
@@ -22,17 +22,17 @@
                 </div>
                 <div class="trust-badge">
                     <span class="trust-icon">🌐</span>
-                    <span>Never sent to any server except Google</span>
+                    <span>Never sent to any server except OpenRouter</span>
                 </div>
                 <div class="trust-badge">
                     <span class="trust-icon">💸</span>
-                    <span>Gemini API is <strong>free</strong> to use</span>
+                    <span>OpenRouter has <strong>free</strong> models available</span>
                 </div>
             </div>
 
             <form id="setupForm" class="topic-form" style="margin-top: 24px;">
                 <div class="input-group">
-                    <input type="password" id="apiKeyInput" placeholder="Paste your Gemini API key here..." autocomplete="off" required>
+                    <input type="password" id="apiKeyInput" placeholder="Paste your OpenRouter API key here (sk-or-...)" autocomplete="off" required>
                     <button type="submit" id="saveBtn" class="btn-primary">
                         <span class="btn-text">Save & Start</span>
                         <span class="btn-loading" style="display:none;">
@@ -50,12 +50,12 @@
             </form>
 
             <div class="setup-steps">
-                <h3>How to get a free API key:</h3>
+                <h3>How to get an API key:</h3>
                 <ol>
-                    <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></li>
-                    <li>Sign in with your Google account</li>
-                    <li>Click <strong>"Create API key"</strong></li>
-                    <li>Copy the key and paste it above</li>
+                    <li>Go to <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a></li>
+                    <li>Sign in or create an account</li>
+                    <li>Click <strong>"Create Key"</strong></li>
+                    <li>Copy the key (starts with <code>sk-or-</code>) and paste it above</li>
                 </ol>
             </div>
 
@@ -64,8 +64,8 @@
                 <p>
                     Your API key is saved to a local <code>.env</code> file in this project's folder.
                     It is <strong>never uploaded, logged, or shared</strong>. Socratic runs entirely
-                    on your machine — the only external call is directly from your browser to Google's
-                    Gemini API. You can delete the key at any time by editing the <code>.env</code> file.
+                    on your machine — the only external call is to the OpenRouter API.
+                    You can delete the key at any time by editing the <code>.env</code> file.
                 </p>
             </div>
         </div>

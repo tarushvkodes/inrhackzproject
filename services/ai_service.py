@@ -1,64 +1,66 @@
 """
 Socratic AI Service
-Implements the Socratic method using Google Gemini to guide students
+Implements the Socratic method using OpenRouter to guide students
 through active learning via progressive questioning.
 
-Uses the free Gemini API: https://aistudio.google.com/apikey
+Uses the OpenRouter API: https://openrouter.ai/keys
 """
 
 import json
 import os
-import google.generativeai as genai
+import time
+import logging
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Lazy initialization — model is configured when the key is available
-_model = None
+logger = logging.getLogger(__name__)
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-def _get_model():
-    """Get or create the Gemini model. Reconfigures if key changed."""
-    global _model
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key or api_key == "your_gemini_api_key_here":
-        raise RuntimeError(
-            "Gemini API key not configured. Please visit /setup to enter your key."
-        )
-    genai.configure(api_key=api_key)
-    if _model is None:
-        _model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            generation_config={
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "max_output_tokens": 1024,
-                "response_mime_type": "application/json",
-            }
-        )
-    return _model
+# Models to try in order (OpenRouter model IDs).
+# Free-tier models are listed first; paid ones as fallback.
+FALLBACK_MODELS = [
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "google/gemma-3-27b-it:free",
+]
+
+# Retry settings
+MAX_RETRIES = 3
+BASE_BACKOFF = 2          # seconds
+BACKOFF_MULTIPLIER = 2    # exponential factor
 
 
 def configure_api_key(api_key):
-    """Reconfigure the Gemini client with a new API key."""
-    global _model
-    os.environ["GEMINI_API_KEY"] = api_key
-    genai.configure(api_key=api_key)
-    _model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        generation_config={
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "max_output_tokens": 1024,
-            "response_mime_type": "application/json",
-        }
-    )
+    """Store the OpenRouter API key in the environment."""
+    os.environ["OPENROUTER_API_KEY"] = api_key
 
 
 def is_api_key_configured():
     """Check whether a valid-looking API key is set."""
-    key = os.getenv("GEMINI_API_KEY", "")
-    return bool(key) and key != "your_gemini_api_key_here"
+    key = os.getenv("OPENROUTER_API_KEY", "")
+    return bool(key) and key != "your_openrouter_api_key_here"
+
+
+def _get_api_key():
+    """Return the current OpenRouter API key or raise."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key or api_key == "your_openrouter_api_key_here":
+        raise RuntimeError(
+            "OpenRouter API key not configured. Please visit /setup to enter your key."
+        )
+    return api_key
+
+
+def _is_rate_limit_error(status_code, body_text=""):
+    """Detect whether a response is a rate-limit / quota error."""
+    if status_code == 429:
+        return True
+    lower = body_text.lower()
+    return any(kw in lower for kw in ("quota", "rate", "resource_exhausted", "too many requests"))
 
 # ----------------------------------------------------------------
 # SYSTEM PROMPTS (Pedagogical Engine)
@@ -139,7 +141,7 @@ overall_understanding and time_well_spent_score are integers from 0 to 100.
 
 
 def _parse_json_response(text):
-    """Safely parse JSON from Gemini response, handling markdown fences."""
+    """Safely parse JSON from LLM response, handling markdown fences."""
     text = text.strip()
     if text.startswith("```"):
         first_newline = text.index("\n")
@@ -149,19 +151,110 @@ def _parse_json_response(text):
     return json.loads(text)
 
 
-def _call_gemini(system_prompt, user_prompt, temperature=0.7):
-    """Unified helper to call Gemini and parse JSON response."""
-    try:
-        m = _get_model()
-        chat = m.start_chat(history=[])
-        full_prompt = system_prompt + "\n\n---\n\n" + user_prompt
-        response = chat.send_message(full_prompt)
-        result = _parse_json_response(response.text)
-        return {"success": True, "data": result}
-    except json.JSONDecodeError as e:
-        return {"success": False, "error": "Failed to parse AI response as JSON: " + str(e)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+def _call_openrouter(system_prompt, user_prompt, temperature=0.7):
+    """
+    Call OpenRouter with retry + exponential backoff + model fallback.
+
+    Strategy:
+    1. Try the primary model with retries (exponential backoff on rate-limit).
+    2. If primary is exhausted after retries, try each fallback model.
+    3. Each fallback also gets retries with backoff.
+    """
+    api_key = _get_api_key()
+    last_error = ""
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5000",
+        "X-Title": "Socratic Learning App",
+    }
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    for model_name in FALLBACK_MODELS:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": 1024,
+                    "response_format": {"type": "json_object"},
+                }
+
+                resp = requests.post(
+                    OPENROUTER_BASE_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data["choices"][0]["message"]["content"]
+                    result = _parse_json_response(text)
+                    if model_name != FALLBACK_MODELS[0]:
+                        logger.info(f"Succeeded with fallback model {model_name}")
+                    return {"success": True, "data": result}
+
+                # Error handling
+                body_text = resp.text
+                if _is_rate_limit_error(resp.status_code, body_text):
+                    last_error = body_text
+                    if attempt < MAX_RETRIES:
+                        wait = BASE_BACKOFF * (BACKOFF_MULTIPLIER ** (attempt - 1))
+                        logger.warning(
+                            f"Rate limited on {model_name} (attempt {attempt}/{MAX_RETRIES}). "
+                            f"Retrying in {wait}s..."
+                        )
+                        time.sleep(wait)
+                        continue
+                    else:
+                        logger.warning(
+                            f"Model {model_name} exhausted after {MAX_RETRIES} retries. "
+                            f"Trying next model..."
+                        )
+                        break
+                else:
+                    # Non-rate-limit error — parse it and return
+                    try:
+                        err_data = resp.json()
+                        err_msg = err_data.get("error", {}).get("message", body_text)
+                    except Exception:
+                        err_msg = body_text
+                    logger.error(f"API error on {model_name}: {err_msg}")
+                    last_error = err_msg
+                    break
+
+            except json.JSONDecodeError as e:
+                return {"success": False, "error": "Failed to parse AI response as JSON: " + str(e)}
+
+            except requests.exceptions.Timeout:
+                last_error = "Request timed out"
+                if attempt < MAX_RETRIES:
+                    time.sleep(BASE_BACKOFF)
+                    continue
+                break
+
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"Unexpected error on {model_name}: {last_error}")
+                break
+
+    return {
+        "success": False,
+        "error": (
+            "All models are currently unavailable or rate-limited. Options:\n"
+            "1. Wait a minute and try again\n"
+            "2. Check your OpenRouter credits at openrouter.ai\n"
+            "3. Try a different API key\n\n"
+            f"Last error: {last_error}"
+        )
+    }
 
 
 def start_session(topic, context=""):
@@ -173,7 +266,7 @@ def start_session(topic, context=""):
     user_prompt += "Additional context from the student: " + (context if context else "None provided") + "\n\n"
     user_prompt += "Begin the Socratic dialogue. Start with a foundational question to gauge their current understanding of this topic. Remember: do NOT explain the topic - ask a question that reveals what they already know."
 
-    return _call_gemini(SOCRATIC_SYSTEM_PROMPT, user_prompt)
+    return _call_openrouter(SOCRATIC_SYSTEM_PROMPT, user_prompt)
 
 
 def continue_dialogue(topic, conversation_history, student_response):
@@ -199,16 +292,7 @@ def continue_dialogue(topic, conversation_history, student_response):
 
     full_prompt = "\n".join(context_parts)
 
-    try:
-        m = _get_model()
-        chat = m.start_chat(history=[])
-        response = chat.send_message(full_prompt)
-        result = _parse_json_response(response.text)
-        return {"success": True, "data": result}
-    except json.JSONDecodeError as e:
-        return {"success": False, "error": "Failed to parse AI response as JSON: " + str(e)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    return _call_openrouter(SOCRATIC_SYSTEM_PROMPT, full_prompt)
 
 
 def get_hint(topic, conversation_history, current_question):
@@ -223,7 +307,7 @@ def get_hint(topic, conversation_history, current_question):
         context += role + ": " + content + "\n"
     context += "\nProvide a helpful hint. Respond with valid JSON only."
 
-    return _call_gemini(HINT_SYSTEM_PROMPT, context)
+    return _call_openrouter(HINT_SYSTEM_PROMPT, context)
 
 
 def generate_session_summary(topic, conversation_history):
@@ -240,7 +324,7 @@ def generate_session_summary(topic, conversation_history):
         context += role + ": " + content + "\n"
     context += "\n\nProvide a comprehensive learning session summary. Respond with valid JSON only."
 
-    return _call_gemini(SUMMARY_SYSTEM_PROMPT, context, temperature=0.5)
+    return _call_openrouter(SUMMARY_SYSTEM_PROMPT, context, temperature=0.5)
 
 
 def generate_topic_suggestions(interests=""):
@@ -256,4 +340,4 @@ def generate_topic_suggestions(interests=""):
 
     prompt += '\nRespond with valid JSON:\n{\n    "suggestions": [\n        {"topic": "topic name", "description": "One-line hook that makes it intriguing", "category": "category", "difficulty": "beginner|intermediate|advanced"}\n    ]\n}'
 
-    return _call_gemini(system, prompt, temperature=0.9)
+    return _call_openrouter(system, prompt, temperature=0.9)

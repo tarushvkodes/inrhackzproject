@@ -48,7 +48,7 @@ with app.app_context():
 
 @app.before_request
 def check_api_key():
-    """Redirect to setup if Gemini API key is not configured."""
+    """Redirect to setup if OpenRouter API key is not configured."""
     allowed = ['/setup', '/api/setup', '/static/']
     if not is_api_key_configured():
         if not any(request.path.startswith(p) for p in allowed):
@@ -65,21 +65,26 @@ def setup():
 
 @app.route('/api/setup', methods=['POST'])
 def api_setup():
-    """Save the Gemini API key."""
+    """Save the OpenRouter API key."""
     data = request.get_json()
     api_key = data.get('api_key', '').strip()
 
     if not api_key:
         return jsonify({'success': False, 'error': 'API key is required'}), 400
 
-    # Quick validation — try to list models
+    # Quick validation — try a lightweight request to OpenRouter
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        # Light check: just configure and trust it; real validation on first use
+        import requests as req
+        resp = req.get(
+            'https://openrouter.ai/api/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=10,
+        )
+        if resp.status_code == 401:
+            return jsonify({'success': False, 'error': 'Invalid API key. Check your key at openrouter.ai/keys'}), 400
         configure_api_key(api_key)
     except Exception as e:
-        return jsonify({'success': False, 'error': f'Invalid API key: {str(e)}'}), 400
+        return jsonify({'success': False, 'error': f'Could not validate key: {str(e)}'}), 400
 
     # Persist to .env file
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -90,16 +95,16 @@ def api_setup():
             with open(env_path, 'w') as f:
                 found = False
                 for line in lines:
-                    if line.startswith('GEMINI_API_KEY='):
-                        f.write(f'GEMINI_API_KEY={api_key}\n')
+                    if line.startswith('OPENROUTER_API_KEY='):
+                        f.write(f'OPENROUTER_API_KEY={api_key}\n')
                         found = True
                     else:
                         f.write(line)
                 if not found:
-                    f.write(f'GEMINI_API_KEY={api_key}\n')
+                    f.write(f'OPENROUTER_API_KEY={api_key}\n')
         else:
             with open(env_path, 'w') as f:
-                f.write(f'GEMINI_API_KEY={api_key}\n')
+                f.write(f'OPENROUTER_API_KEY={api_key}\n')
     except Exception as e:
         # Key is in memory even if file write fails
         pass

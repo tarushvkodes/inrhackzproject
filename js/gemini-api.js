@@ -1,22 +1,25 @@
 /**
- * Socratic — Client-Side Gemini API Service
- * Probes available models at setup time so we never pick one with zero quota.
- * Uses systemInstruction + multi-turn format to minimise tokens.
+ * Socratic — Client-Side OpenRouter API Service
+ * Uses OpenRouter (OpenAI-compatible) endpoint with model fallback + retry.
  */
 
 const GeminiAPI = {
     // ─── Config ───
     _lastRequestTime: 0,
-    _minRequestGap: 4000,       // 4 s between requests
+    _minRequestGap: 1000,       // 1 s between requests
     _requestQueue: Promise.resolve(),
     _maxHistory: 10,            // Only send last N conversation turns
+    _maxRetries: 3,             // Retries per model on rate-limit
+    _baseBackoff: 2000,         // 2 s initial backoff
 
-    // Every model we might try, in preference order
+    OPENROUTER_URL: 'https://openrouter.ai/api/v1/chat/completions',
+
+    // Models to try, in preference order
     ALL_MODELS: [
-        'gemini-2.5-flash-lite',
-        'gemini-2.5-flash',
-        'gemini-2.0-flash-lite',
-        'gemini-2.0-flash',
+        'google/gemini-2.5-flash',
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'mistralai/mistral-small-3.1-24b-instruct:free',
+        'google/gemma-3-27b-it:free',
     ],
 
     // ─── System Prompts (compact) ───
@@ -34,79 +37,49 @@ Progress difficulty as student improves. Be warm but rigorous.`,
 {"topic_summary":"","key_discoveries":[],"misconceptions_addressed":[],"remaining_gaps":[],"overall_understanding":0,"recommended_next_topics":[],"learning_style_notes":"","time_well_spent_score":0}
 Scores 0-100.`,
 
-    // ─── Model probing ───
+    // ─── API Key Validation ───
 
-    /**
-     * Validate the API key AND probe which models actually have quota.
-     * Returns { success, error?, workingModels? }
-     */
     async validateApiKey(apiKey) {
-        // First check the key is valid at all
         try {
-            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                return { success: false, error: d?.error?.message || 'Invalid API key' };
+            // Quick validation: make a tiny request to OpenRouter
+            const res = await fetch(this.OPENROUTER_URL, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': window.location.origin,
+                    'X-Title': 'Socratic Learning App',
+                },
+                body: JSON.stringify({
+                    model: this.ALL_MODELS[0],
+                    messages: [{ role: 'user', content: 'Hi' }],
+                    max_tokens: 1,
+                }),
+            });
+
+            if (res.ok) {
+                return { success: true };
             }
+
+            const errData = await res.json().catch(() => ({}));
+            const errMsg = errData?.error?.message || `API error (${res.status})`;
+
+            if (res.status === 401) {
+                return { success: false, error: 'Invalid API key. Check your key at openrouter.ai/keys' };
+            }
+            if (res.status === 402) {
+                return { success: false, error: 'No credits remaining. Add credits at openrouter.ai' };
+            }
+
+            // Rate limit during validation is fine — key is valid
+            if (res.status === 429) {
+                return { success: true };
+            }
+
+            return { success: false, error: errMsg };
         } catch (e) {
             return { success: false, error: 'Network error. Check your connection.' };
         }
-
-        // Now probe each model with a tiny request to see which ones work
-        const workingModels = [];
-        for (const model of this.ALL_MODELS) {
-            try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-                const probeRes = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
-                        generationConfig: { maxOutputTokens: 1 },
-                    }),
-                });
-                if (probeRes.ok) {
-                    workingModels.push(model);
-                } else {
-                    const err = await probeRes.json().catch(() => ({}));
-                    const msg = err?.error?.message || '';
-                    // If it's NOT a rate/quota error, the model might still work later
-                    if (!msg.toLowerCase().includes('limit: 0') &&
-                        !msg.toLowerCase().includes('quota') &&
-                        probeRes.status !== 429) {
-                        workingModels.push(model);
-                    } else {
-                        console.warn(`Model ${model} has no quota: ${msg}`);
-                    }
-                }
-                // Small pause between probes to not hit rate limits during probing
-                await new Promise(r => setTimeout(r, 1500));
-            } catch (e) {
-                // Network error during probe — assume model might work
-                workingModels.push(model);
-            }
-        }
-
-        if (workingModels.length === 0) {
-            return {
-                success: false,
-                error: 'Your API key is valid but all models have zero quota. Try creating a new API key at aistudio.google.com/apikey, or wait for your daily quota to reset (midnight Pacific time).'
-            };
-        }
-
-        // Save working models list
-        localStorage.setItem('socratic_working_models', JSON.stringify(workingModels));
-
-        return { success: true, workingModels };
-    },
-
-    /** Get models that were confirmed working during key validation. */
-    _getWorkingModels() {
-        try {
-            const saved = localStorage.getItem('socratic_working_models');
-            if (saved) return JSON.parse(saved);
-        } catch (e) {}
-        return this.ALL_MODELS; // fallback to trying everything
     },
 
     // ─── Internals ───
@@ -131,90 +104,108 @@ Scores 0-100.`,
         return false;
     },
 
-    async _rawFetch(model, apiKey, body) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        return fetch(url, {
+    async _rawFetch(model, apiKey, messages, temperature, maxTokens) {
+        return fetch(this.OPENROUTER_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': window.location.origin,
+                'X-Title': 'Socratic Learning App',
+            },
+            body: JSON.stringify({
+                model,
+                messages,
+                temperature,
+                max_tokens: maxTokens || 1024,
+                response_format: { type: 'json_object' },
+            }),
         });
     },
 
-    _buildBody(systemText, contents, temperature) {
-        const body = {
-            contents,
-            generationConfig: {
-                temperature,
-                maxOutputTokens: 300,
-                responseMimeType: 'application/json',
-            },
-        };
-        if (systemText) {
-            body.systemInstruction = { parts: [{ text: systemText }] };
+    /**
+     * Build the messages array (OpenAI format) from system prompt + user content.
+     */
+    _buildMessages(systemPrompt, contents) {
+        const msgs = [];
+        if (systemPrompt) {
+            msgs.push({ role: 'system', content: systemPrompt });
         }
-        return body;
+        if (Array.isArray(contents)) {
+            // Multi-turn conversation
+            for (const turn of contents) {
+                msgs.push(turn);
+            }
+        } else {
+            msgs.push({ role: 'user', content: String(contents) });
+        }
+        return msgs;
     },
 
     /**
-     * Core call: tries each working model in order.
-     * On rate-limit → immediately skip to next model (no waiting).
-     * On success → return.
+     * Core call: tries each model with retries + exponential backoff.
      */
-    async _callGemini(systemPrompt, contents, temperature = null) {
+    async _callAPI(systemPrompt, contents, temperature = null) {
         const apiKey = Storage.getApiKey();
         if (!apiKey) return { success: false, error: 'API key not configured.' };
 
         const temp = temperature !== null ? temperature : Storage.getTemperature();
-        const turns = Array.isArray(contents)
-            ? contents
-            : [{ role: 'user', parts: [{ text: contents }] }];
-        const body = this._buildBody(systemPrompt, turns, temp);
+        const messages = this._buildMessages(systemPrompt, contents);
 
-        // Use working models list; put user's preferred model first
-        const preferred = Storage.getModel();
-        const working = this._getWorkingModels();
-        const modelsToTry = [preferred, ...working.filter(m => m !== preferred)];
+        const modelsToTry = [...this.ALL_MODELS];
 
         return this._enqueue(async () => {
             let lastError = '';
 
             for (const model of modelsToTry) {
-                try {
-                    const res = await this._rawFetch(model, apiKey, body);
+                for (let attempt = 1; attempt <= this._maxRetries; attempt++) {
+                    try {
+                        const res = await this._rawFetch(model, apiKey, messages, temp);
 
-                    if (res.ok) {
-                        const data = await res.json();
-                        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                        const parsed = this._parseJSON(text);
-                        if (model !== preferred) parsed._usedModel = model;
-                        return { success: true, data: parsed };
+                        if (res.ok) {
+                            const data = await res.json();
+                            const text = data?.choices?.[0]?.message?.content || '';
+                            const parsed = this._parseJSON(text);
+                            return { success: true, data: parsed };
+                        }
+
+                        const errData = await res.json().catch(() => ({}));
+                        const errMsg = errData?.error?.message || `API error (${res.status})`;
+
+                        if (this._isRateLimitError(res.status, errMsg)) {
+                            lastError = errMsg;
+
+                            if (attempt < this._maxRetries) {
+                                const wait = this._baseBackoff * Math.pow(2, attempt - 1);
+                                console.warn(`${model} rate-limited (attempt ${attempt}/${this._maxRetries}). Retrying in ${wait}ms...`);
+                                window.dispatchEvent(new CustomEvent('gemini-rate-limit', {
+                                    detail: { waitSeconds: Math.ceil(wait / 1000), model, attempt }
+                                }));
+                                await new Promise(r => setTimeout(r, wait));
+                                continue;
+                            }
+
+                            console.warn(`${model} exhausted after ${this._maxRetries} retries, trying next model...`);
+                            break;
+                        }
+
+                        // Non-rate-limit error — don't retry
+                        return { success: false, error: errMsg };
+                    } catch (e) {
+                        lastError = e.message || 'Network error.';
+                        if (attempt < this._maxRetries) {
+                            const wait = this._baseBackoff * Math.pow(2, attempt - 1);
+                            await new Promise(r => setTimeout(r, wait));
+                            continue;
+                        }
+                        break;
                     }
-
-                    const errData = await res.json().catch(() => ({}));
-                    const errMsg = errData?.error?.message || `API error (${res.status})`;
-
-                    if (this._isRateLimitError(res.status, errMsg)) {
-                        // Don't wait — just try the next model immediately
-                        console.warn(`${model} rate-limited, trying next model...`);
-                        window.dispatchEvent(new CustomEvent('gemini-rate-limit', {
-                            detail: { waitSeconds: 0, model, attempt: 1 }
-                        }));
-                        lastError = errMsg;
-                        continue;
-                    }
-
-                    // Non-rate-limit error
-                    return { success: false, error: errMsg };
-                } catch (e) {
-                    lastError = e.message || 'Network error.';
-                    continue;
                 }
             }
 
-            // All models failed — give the user actionable advice
             return {
                 success: false,
-                error: `All models are rate-limited. This usually means your daily free-tier quota is used up.\n\nFix options:\n1. Wait until your quota resets (midnight Pacific time)\n2. Create a new API key at aistudio.google.com/apikey\n3. Enable billing on your Google Cloud project for higher limits\n\nLast error: ${lastError}`
+                error: `All models are rate-limited or unavailable.\n\nFix options:\n1. Wait a minute and try again\n2. Check your credits at openrouter.ai\n3. Try a different API key\n\nLast error: ${lastError}`
             };
         });
     },
@@ -230,29 +221,29 @@ Scores 0-100.`,
 
     async startSession(topic, context) {
         const prompt = `Topic: ${topic}\nContext: ${context || 'None'}\nAsk one foundational question to gauge what I know. Do NOT explain the topic.`;
-        return this._callGemini(this.SOCRATIC_SYSTEM_PROMPT, prompt);
+        return this._callAPI(this.SOCRATIC_SYSTEM_PROMPT, prompt);
     },
 
     async continueDialogue(topic, conversationHistory, studentResponse) {
-        const contents = [];
+        const messages = [];
         const trimmed = conversationHistory.slice(-this._maxHistory);
 
-        contents.push({ role: 'user', parts: [{ text: `Topic: ${topic}` }] });
-        contents.push({ role: 'model', parts: [{ text: '{"question":"Let\'s explore this."}' }] });
+        messages.push({ role: 'user', content: `Topic: ${topic}` });
+        messages.push({ role: 'assistant', content: '{"question":"Let\'s explore this."}' });
 
         for (const entry of trimmed) {
             if (entry.role === 'assistant') {
                 const q = typeof entry.content === 'object'
                     ? (entry.content.question || JSON.stringify(entry.content))
                     : String(entry.content);
-                contents.push({ role: 'model', parts: [{ text: q }] });
+                messages.push({ role: 'assistant', content: q });
             } else {
-                contents.push({ role: 'user', parts: [{ text: String(entry.content) }] });
+                messages.push({ role: 'user', content: String(entry.content) });
             }
         }
-        contents.push({ role: 'user', parts: [{ text: studentResponse }] });
+        messages.push({ role: 'user', content: studentResponse });
 
-        return this._callGemini(this.SOCRATIC_SYSTEM_PROMPT, contents);
+        return this._callAPI(this.SOCRATIC_SYSTEM_PROMPT, messages);
     },
 
     async getHint(topic, conversationHistory, currentQuestion) {
@@ -263,7 +254,7 @@ Scores 0-100.`,
             const c = typeof e.content === 'string' ? e.content : (e.content.question || '');
             ctx += `${r}: ${c}\n`;
         }
-        return this._callGemini(this.HINT_SYSTEM_PROMPT, ctx);
+        return this._callAPI(this.HINT_SYSTEM_PROMPT, ctx);
     },
 
     async generateSessionSummary(topic, conversationHistory) {
@@ -274,12 +265,12 @@ Scores 0-100.`,
             const c = typeof e.content === 'object' ? (e.content.question || '') : String(e.content);
             ctx += `${r}: ${c}\n`;
         }
-        return this._callGemini(this.SUMMARY_SYSTEM_PROMPT, ctx, 0.5);
+        return this._callAPI(this.SUMMARY_SYSTEM_PROMPT, ctx, 0.5);
     },
 
     async generateTopicSuggestions(interests) {
         const sys = 'Suggest 6 learning topics. JSON: {"suggestions":[{"topic":"","description":"","category":"","difficulty":"beginner|intermediate|advanced"}]}';
         const prompt = interests ? `Interests: ${interests}` : 'Mix of science, tech, philosophy, math, history.';
-        return this._callGemini(sys, prompt, 0.9);
+        return this._callAPI(sys, prompt, 0.9);
     },
 };

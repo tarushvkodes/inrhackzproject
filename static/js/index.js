@@ -54,7 +54,7 @@ async function handleStartSession(e) {
         if (data.success) {
             window.location.href = `/learn/${data.session_id}`;
         } else {
-            showError(data.error || 'Failed to start session. Check your Gemini API key.');
+            showError(data.error || 'Failed to start session. Check your OpenRouter API key.');
         }
     } catch (err) {
         showError('Network error. Is the server running?');

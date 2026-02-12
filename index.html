@@ -95,7 +95,7 @@
     <!-- Footer -->
     <footer class="footer">
         <p>Socratic — AI-powered active learning through guided discovery</p>
-        <p class="footer-sub">Powered by Google Gemini | The Socratic Method, reimagined</p>
+        <p class="footer-sub">Powered by OpenRouter | The Socratic Method, reimagined</p>
     </footer>
 </div>
 
@@ -110,13 +110,13 @@
 
         <div class="setup-trust-badges">
             <div class="trust-badge"><span class="trust-icon">🔒</span><span>Stored <strong>only</strong> in your browser</span></div>
-            <div class="trust-badge"><span class="trust-icon">🌐</span><span>Never sent to any server except Google</span></div>
-            <div class="trust-badge"><span class="trust-icon">💸</span><span>Gemini API is <strong>free</strong> to use</span></div>
+            <div class="trust-badge"><span class="trust-icon">🌐</span><span>Never sent to any server except OpenRouter</span></div>
+            <div class="trust-badge"><span class="trust-icon">💸</span><span>OpenRouter has <strong>free</strong> models available</span></div>
         </div>
 
         <form id="setupForm" style="margin-top:20px;">
             <div class="input-group">
-                <input type="password" id="setupApiKeyInput" placeholder="Paste your Gemini API key here..." autocomplete="off" required>
+                <input type="password" id="setupApiKeyInput" placeholder="Paste your OpenRouter API key (sk-or-...)" autocomplete="off" required>
                 <button type="submit" id="setupSaveBtn" class="btn-primary">
                     <span class="btn-text">Save & Start</span>
                     <span class="btn-loading" style="display:none;"><span class="spinner"></span></span>
@@ -131,12 +131,12 @@
         </form>
 
         <div class="setup-steps">
-            <h3>How to get a free API key:</h3>
+            <h3>How to get an API key:</h3>
             <ol>
-                <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></li>
-                <li>Sign in with your Google account</li>
-                <li>Click <strong>"Create API key"</strong></li>
-                <li>Copy the key and paste it above</li>
+                <li>Go to <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a></li>
+                <li>Sign in or create an account</li>
+                <li>Click <strong>"Create Key"</strong></li>
+                <li>Copy the key (starts with <code>sk-or-</code>) and paste it above</li>
             </ol>
         </div>
 
@@ -145,7 +145,7 @@
             <p>
                 Your API key is stored <strong>only in your browser's localStorage</strong>.
                 It is <strong>never uploaded, logged, or shared</strong>. Socratic runs entirely
-                in your browser — the only external call is directly to Google's Gemini API.
+                in your browser — the only external call is to the OpenRouter API.
                 You can delete the key at any time from Settings.
             </p>
         </div>
@@ -162,22 +162,22 @@
 
         <form id="settingsForm">
             <div class="settings-group">
-                <label class="settings-label">Gemini API Key</label>
+                <label class="settings-label">OpenRouter API Key</label>
                 <div class="input-group">
-                    <input type="password" id="settingsApiKey" placeholder="Your Gemini API key" autocomplete="off">
+                    <input type="password" id="settingsApiKey" placeholder="Your OpenRouter API key (sk-or-...)" autocomplete="off">
                     <button type="button" id="settingsToggleKey" class="btn-ghost btn-small">Show</button>
                 </div>
-                <p class="settings-hint">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></p>
+                <p class="settings-hint">Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a></p>
             </div>
 
             <div class="settings-group">
                 <label class="settings-label">Model</label>
                 <select id="settingsModel" class="settings-select">
-                    <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (recommended)</option>
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                    <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (slower, smarter)</option>
+                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (recommended)</option>
+                    <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B — Free</option>
+                    <option value="mistralai/mistral-small-3.1-24b-instruct:free">Mistral Small 3.1 — Free</option>
+                    <option value="google/gemma-3-27b-it:free">Gemma 3 27B — Free</option>
+                    <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 (paid, smarter)</option>
                 </select>
                 <p class="settings-hint">If rate-limited, the app will automatically try other models as fallback.</p>
             </div>

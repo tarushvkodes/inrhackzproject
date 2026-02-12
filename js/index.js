@@ -1,9 +1,9 @@
 /**
  * Socratic — Landing Page Logic (Static / GitHub Pages version)
- * Uses localStorage for data and calls Gemini API directly from browser.
+ * Uses localStorage for data and calls OpenRouter API directly from browser.
  */
 
-// Listen for rate-limit events from GeminiAPI and show a countdown toast
+// Listen for rate-limit events from the API service and show a toast
 window.addEventListener('gemini-rate-limit', (e) => {
     const { waitSeconds, model, attempt } = e.detail;
     showError(`Rate limited — retrying in ${waitSeconds}s (trying ${model}, attempt ${attempt})...`);
@@ -50,11 +50,6 @@ function setupSetupModal() {
         const result = await GeminiAPI.validateApiKey(key);
         if (result.success) {
             Storage.setApiKey(key);
-            // Auto-select the first working model
-            if (result.workingModels && result.workingModels.length > 0) {
-                Storage.setModel(result.workingModels[0]);
-                console.log('Working models:', result.workingModels);
-            }
             document.getElementById('setupModal').style.display = 'none';
             loadSuggestions();
         } else {

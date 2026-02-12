@@ -27,12 +27,12 @@ const Storage = {
 
     isApiKeyConfigured() {
         const key = this.getApiKey();
-        return !!key && key !== 'your_gemini_api_key_here';
+        return !!key && key !== 'your_openrouter_api_key_here';
     },
 
     // ─── Model Settings ───
     getModel() {
-        return localStorage.getItem(STORAGE_KEYS.MODEL) || 'gemini-2.5-flash-lite';
+        return localStorage.getItem(STORAGE_KEYS.MODEL) || 'google/gemini-2.5-flash';
     },
 
     setModel(model) {
